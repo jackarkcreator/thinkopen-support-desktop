@@ -28,8 +28,14 @@
 ; check, so we re-insert the default _CHECK_APP_RUNNING. The recolor is guarded to
 ; the installer so the uninstaller's path stays identical to the default.
 !macro customCheckAppRunning
+  ; Installer only. Re-inserting _CHECK_APP_RUNNING from this overriding hook
+  ; fails to COMPILE in the uninstaller context (GetProcessInfo expansion errors),
+  ; so we scope the whole body to the installer. Cost: the STANDALONE uninstaller
+  ; skips its running-app check (manual uninstall-while-running may leave a locked
+  ; file) — minor; UPDATES are unaffected (they use installSection's
+  ; uninstallOldVersion, not this hook).
   !ifndef BUILD_UNINSTALLER
     !insertmacro paintTitleBarNavy
+    !insertmacro _CHECK_APP_RUNNING
   !endif
-  !insertmacro _CHECK_APP_RUNNING
 !macroend
