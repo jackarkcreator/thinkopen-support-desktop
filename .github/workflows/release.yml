@@ -1,0 +1,42 @@
+name: Release
+
+# Build + publish installers on a version tag (e.g. `git tag v1.0.0 && git push --tags`).
+# macOS → universal .dmg/.zip; Windows → NSIS .exe. Both are published to THIS repo's
+# GitHub Releases (the public auto-update feed electron-updater reads). Builds are
+# currently UNSIGNED — add Apple notarization + Azure Trusted Signing secrets later.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # electron-builder needs to create the Release + upload assets
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --mac --universal
+          - os: windows-latest
+            args: --win --x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build & publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder ${{ matrix.args }} --publish always

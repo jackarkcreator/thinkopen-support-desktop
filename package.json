@@ -1,0 +1,78 @@
+{
+  "name": "thinkopen-support-desktop",
+  "productName": "ThinkOpen Support",
+  "version": "1.0.0",
+  "description": "ThinkOpen Support — client desktop app",
+  "author": "ThinkOpen Inc. <info@thinkopen.net>",
+  "license": "UNLICENSED",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jackarkcreator/thinkopen-support-desktop.git"
+  },
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "pack": "electron-builder --dir"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "net.thinkopen.support",
+    "productName": "ThinkOpen Support",
+    "copyright": "Copyright © 2026 ThinkOpen Inc.",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "jackarkcreator",
+        "repo": "thinkopen-support-desktop",
+        "releaseType": "release"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.icns",
+      "identity": null,
+      "darkModeSupport": true,
+      "artifactName": "${name}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "ThinkOpen Support ${version}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "${name}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ThinkOpen Support"
+    }
+  }
+}
