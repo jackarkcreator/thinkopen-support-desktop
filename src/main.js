@@ -76,7 +76,7 @@ function collectSoftware() {
 }
 
 async function collectInventory() {
-  const [uuidData, sys, cpu, mem, osInfo, disks, users, software] = await Promise.all([
+  const [uuidData, sys, cpu, mem, osInfo, disks, users, bios, netIfaces, defaultIface, software] = await Promise.all([
     si.uuid().catch(() => ({})),
     si.system().catch(() => ({})),
     si.cpu().catch(() => ({})),
@@ -84,6 +84,9 @@ async function collectInventory() {
     si.osInfo().catch(() => ({})),
     si.diskLayout().catch(() => []),
     si.users().catch(() => []),
+    si.bios().catch(() => ({})),
+    si.networkInterfaces().catch(() => []),
+    si.networkInterfaceDefault().catch(() => null),
     collectSoftware(),
   ]);
 
@@ -95,6 +98,26 @@ async function collectInventory() {
       ? (osInfo.release || null)
       : `${(osInfo.distro || "").replace(/Microsoft Windows/i, "").trim()}${osInfo.build ? ` (${osInfo.build})` : ""}`.trim() || (osInfo.release || null);
   const osUser = (users && users[0] && users[0].user) || os.userInfo().username || null;
+
+  // Network: prefer the OS's default interface; fall back to the first active,
+  // non-internal IPv4 interface. Yields the LAN IPv4 + the primary MAC.
+  const ifaces = Array.isArray(netIfaces) ? netIfaces : netIfaces ? [netIfaces] : [];
+  const primaryIface =
+    ifaces.find((n) => n && n.iface === defaultIface && n.ip4) ||
+    ifaces.find((n) => n && !n.internal && n.ip4 && n.operstate !== "down") ||
+    ifaces.find((n) => n && !n.internal && n.ip4) ||
+    null;
+  const localIp = (primaryIface && primaryIface.ip4) || null;
+  const primaryMac = (primaryIface && primaryIface.mac) || null;
+
+  // Uptime → a STABLE boot instant (one-shot snapshot: store the moment, not a
+  // number that's stale the second the server reads it). si.time() is sync.
+  const t = si.time() || {};
+  const uptimeSec = typeof t.uptime === "number" ? t.uptime : null;
+  const bootTime = uptimeSec != null ? new Date(Date.now() - uptimeSec * 1000).toISOString() : null;
+  let timezone = null;
+  try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { /* fall back */ }
+  if (!timezone) timezone = t.timezone || null;
 
   return {
     hardwareUuid,
@@ -108,6 +131,17 @@ async function collectInventory() {
     diskBytes,
     lastOsUser: osUser,
     appVersion: app.getVersion(),
+    // Network identity
+    localIp,
+    primaryMac,
+    // Hardware identity
+    manufacturer: sys.manufacturer || null,
+    model: sys.model || null,
+    biosVersion: bios.version || null,
+    biosVendor: bios.vendor || null,
+    // Lifecycle
+    bootTime,
+    timezone,
     software,
   };
 }
