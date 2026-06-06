@@ -28,7 +28,10 @@ function collectSoftware() {
     const opts = { timeout: 25000, maxBuffer: 64 * 1024 * 1024 };
     try {
       if (process.platform === "darwin") {
-        execFile("system_profiler", ["SPApplicationsDataType", "-json"], opts, (err, stdout) => {
+        // Absolute path: a Finder/dock-launched macOS app gets a stripped PATH,
+        // so the bare command name can fail to resolve (silent empty list). The
+        // command itself is fast (~1s) — the relative lookup was the gap.
+        execFile("/usr/sbin/system_profiler", ["SPApplicationsDataType", "-json"], opts, (err, stdout) => {
           if (err) return resolve([]);
           try {
             const apps = (JSON.parse(stdout).SPApplicationsDataType || [])
