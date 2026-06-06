@@ -10,7 +10,17 @@
 // admin shell light up with zero web changes and the client portal shell adds
 // its own. backgroundColor is navy so the load flash is navy, not the old teal.
 
-const { app, BrowserWindow, Menu, shell, ipcMain } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Tray,
+  Menu,
+  shell,
+  ipcMain,
+  nativeImage,
+  powerMonitor,
+  dialog,
+} = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -102,6 +112,71 @@ async function collectInventory() {
   };
 }
 
+// ---- Koban presence agent (live session/activity primitive) ---------------
+// Reports the current login session: who's logged in, when the session began
+// (process start ≈ login when autostarted), how long they've been idle, and
+// whether the screen is locked. powerMonitor gives OS-truth idle/lock. The web
+// app gates on the `activity` entitlement + a one-time disclosure and owns the
+// authenticated POST (~60s). See project_koban.
+const SESSION_STARTED_AT = new Date(); // process start ≈ login when autostarted
+
+// hardware_uuid is our device identity; it never changes for the life of the
+// process, so resolve it once (si.uuid is comparatively heavy) and cache it.
+let cachedHardwareUuid = null;
+async function getHardwareUuid() {
+  if (cachedHardwareUuid) return cachedHardwareUuid;
+  try {
+    const [uuidData, sys] = await Promise.all([
+      si.uuid().catch(() => ({})),
+      si.system().catch(() => ({})),
+    ]);
+    cachedHardwareUuid = uuidData.hardware || sys.uuid || uuidData.os || os.hostname();
+  } catch {
+    cachedHardwareUuid = os.hostname();
+  }
+  return cachedHardwareUuid;
+}
+
+async function collectPresence() {
+  const hardwareUuid = await getHardwareUuid();
+  let idleSeconds = null;
+  let lockState = "unknown"; // 'active' | 'idle' | 'locked' | 'unknown'
+  try { idleSeconds = powerMonitor.getSystemIdleTime(); } catch { /* unsupported */ }
+  try { lockState = powerMonitor.getSystemIdleState(300); } catch { /* unsupported */ } // 5-min idle threshold
+  let osUser = null;
+  try { osUser = os.userInfo().username || null; } catch { /* non-fatal */ }
+  return {
+    hardwareUuid,
+    osUser,
+    sessionStartedAt: SESSION_STARTED_AT.toISOString(),
+    idleSeconds,
+    lockState,
+    platform: process.platform,
+    hostname: os.hostname() || null,
+    appVersion: app.getVersion(),
+  };
+}
+
+// Persistent activity-monitoring disclosure (the "always available" half of the
+// first-run notice the web app shows). Reachable any time from the tray so the
+// monitored user can re-read exactly what is collected and why.
+const ACTIVITY_DISCLOSURE =
+  "When your organization enables Koban activity monitoring, this app reports " +
+  "your device's session presence to your IT administrators: the signed-in " +
+  "username, when the session started, how long the device has been idle, and " +
+  "whether the screen is locked. It does NOT capture keystrokes, screen " +
+  "contents, browsing, or file activity. The data is used for IT support, " +
+  "utilization, and billing accuracy. Questions? Contact your IT administrator.";
+function showActivityDisclosure() {
+  dialog.showMessageBox({
+    type: "info",
+    title: "Privacy & Activity Monitoring",
+    message: "Koban activity monitoring",
+    detail: ACTIVITY_DISCLOSURE,
+    buttons: ["OK"],
+  });
+}
+
 // Auto-update pulls from the app's public GitHub Releases feed (configured in
 // package.json build.publish). Windows (NSIS) self-updates even unsigned; macOS
 // auto-update requires a signed/notarized build, so until we sign it the mac
@@ -140,6 +215,16 @@ function initAutoUpdates() {
       return await collectInventory();
     } catch (err) {
       console.warn("[koban] inventory collection failed:", err && err.message);
+      return null;
+    }
+  });
+
+  // Koban: the web app asks for a live presence snapshot (~60s); failures → null.
+  ipcMain.handle("minka:get-presence", async () => {
+    try {
+      return await collectPresence();
+    } catch (err) {
+      console.warn("[koban] presence collection failed:", err && err.message);
       return null;
     }
   });
@@ -184,18 +269,96 @@ function saveState(win) {
 }
 
 let mainWindow = null;
+let tray = null;
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.focus(); }
-  });
+  app.on("second-instance", () => showWindow());
+}
+
+// True when the OS started us at login as a hidden item (boot straight to the
+// tray and keep heartbeating presence without stealing focus). macOS reports
+// this via wasOpenedAsHidden; on Windows we pass a --hidden arg in the login item.
+function launchedHidden() {
+  try {
+    return process.argv.includes("--hidden") || app.getLoginItemSettings().wasOpenedAsHidden === true;
+  } catch {
+    return false;
+  }
+}
+
+// First launch only: default to start-at-login (hidden to tray) so presence
+// reporting is continuous without the user opting in. Forced ONCE (marker file)
+// so a later opt-out via the tray sticks across updates.
+function ensureAutostartDefault() {
+  try {
+    const marker = path.join(app.getPath("userData"), "autostart-initialized");
+    if (fs.existsSync(marker)) return;
+    app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true, args: ["--hidden"] });
+    fs.writeFileSync(marker, new Date().toISOString());
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function showWindow() {
+  if (!mainWindow) { createWindow(); return; }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+}
+
+function buildTray() {
+  const img = nativeImage.createFromPath(
+    path.join(__dirname, "..", "assets", "trayTemplate.png")
+  );
+  img.setTemplateImage(true);
+  tray = new Tray(img);
+  tray.setToolTip("ThinkOpen Support");
+  refreshTrayMenu();
+  tray.on("click", () => showWindow());
+}
+
+function refreshTrayMenu() {
+  if (!tray) return;
+  const loginOn = app.getLoginItemSettings().openAtLogin;
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Open ThinkOpen Support", click: () => showWindow() },
+      { type: "separator" },
+      {
+        label: "Open at Login",
+        type: "checkbox",
+        checked: loginOn,
+        click: (item) => {
+          app.setLoginItemSettings({
+            openAtLogin: item.checked,
+            openAsHidden: true,
+            args: ["--hidden"],
+          });
+          refreshTrayMenu();
+        },
+      },
+      { label: "Reload", click: () => mainWindow && mainWindow.webContents.reload() },
+      { label: "Privacy & Activity…", click: () => showActivityDisclosure() },
+      { type: "separator" },
+      {
+        label: "Quit ThinkOpen Support",
+        accelerator: "Command+Q",
+        click: () => {
+          app.isQuitting = true;
+          app.quit();
+        },
+      },
+    ])
+  );
 }
 
 function createWindow() {
   const s = loadState();
+  const startHidden = launchedHidden();
   // The web app paints its own navy (#0A2540) title bar (DesktopTitleBar, h-10
   // = 40px) gated to window.minka.isDesktop. We hide the OS frame so that navy
   // bar IS the window title bar on every platform:
@@ -213,6 +376,7 @@ function createWindow() {
     y: s.y,
     minWidth: 800,
     minHeight: 560,
+    show: !startHidden, // start in the tray when auto-launched at login
     backgroundColor: "#0A2540", // ThinkOpen navy — matches the web app's navy bar, no flash
     title: "ThinkOpen Support",
     // Keep the native menu off the chrome on Win/Linux so it doesn't sit below
@@ -227,6 +391,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: true,
+      // Keep the ~60s presence heartbeat at full fidelity while hidden in the
+      // tray — Electron otherwise throttles a hidden window's timers.
+      backgroundThrottling: false,
     },
   });
 
@@ -242,6 +409,17 @@ function createWindow() {
   });
 
   ["resize", "move"].forEach((evt) => mainWindow.on(evt, () => saveState(mainWindow)));
+
+  // Close = hide to the tray (keeps the app + presence heartbeat alive). Real
+  // quit goes through the tray's Quit or Cmd+Q (which set app.isQuitting first).
+  mainWindow.on("close", (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+    } else {
+      saveState(mainWindow);
+    }
+  });
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 
@@ -265,10 +443,19 @@ function buildAppMenu() {
 
 app.whenReady().then(() => {
   buildAppMenu();
+  ensureAutostartDefault();
   createWindow();
+  buildTray();
   initAutoUpdates();
-  app.on("activate", () => { if (!mainWindow) createWindow(); else mainWindow.focus(); });
+  app.on("activate", () => showWindow());
 });
 
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("before-quit", () => saveState(mainWindow));
+// The window hides to the tray on close, so the app stays resident (and keeps
+// reporting presence). Only a real quit (tray Quit / Cmd+Q) exits.
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+app.on("before-quit", () => {
+  app.isQuitting = true;
+  saveState(mainWindow);
+});
