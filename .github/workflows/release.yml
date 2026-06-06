@@ -18,6 +18,13 @@ jobs:
   build:
     strategy:
       fail-fast: false
+      # Serialize the platform jobs. `electron-builder --publish always` has each
+      # job CREATE the GitHub release for the tag; running mac + win in parallel
+      # races them, and the loser hits HTTP 422 "tag already_exists" and fails
+      # WITHOUT publishing its assets (the Windows .exe + latest.yml update feed
+      # silently missing). Sequential = job 1 creates the release, job 2 finds it
+      # and uploads to it. (Race hit this repo on v1.0.8, 2026-06-06.)
+      max-parallel: 1
       matrix:
         include:
           - os: macos-latest
