@@ -75,8 +75,66 @@ function collectSoftware() {
   });
 }
 
+// Run a system binary and resolve its trimmed stdout (or null on any failure /
+// timeout). Absolute paths only — a packaged app has a stripped PATH.
+function shOut(cmd, args, timeout = 9000) {
+  return new Promise((resolve) => {
+    try {
+      execFile(cmd, args, { timeout, maxBuffer: 1 << 20 }, (err, stdout) => resolve(err ? null : (stdout || "").trim()));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+// Security posture + domain join — the "is this machine safe?" signals. All
+// read-only, no-admin, fast, OS-native; each degrades to null (= "unknown") so a
+// missing tool never blocks the inventory report. See project_koban.
+async function collectPosture() {
+  const none = { domain: null, diskEncrypted: null, firewallEnabled: null, rebootPending: null };
+  try {
+    if (process.platform === "darwin") {
+      const [fv, fw, ad] = await Promise.all([
+        shOut("/usr/bin/fdesetup", ["status"]),                                                    // FileVault
+        shOut("/usr/libexec/ApplicationFirewall/socketfilterfw", ["--getglobalstate"]),            // firewall
+        shOut("/usr/sbin/dsconfigad", ["-show"]),                                                  // AD bind
+      ]);
+      let domain = null;
+      if (ad) { const m = ad.match(/Active Directory Domain\s*=\s*(\S+)/i); if (m) domain = m[1]; }
+      return {
+        domain,
+        diskEncrypted: fv == null ? null : /FileVault is On/i.test(fv),
+        firewallEnabled: fw == null ? null : /enabled|State = [12]/i.test(fw),
+        rebootPending: null, // not a meaningful concept on macOS
+      };
+    }
+    if (process.platform === "win32") {
+      const ps =
+        "$d=(Get-CimInstance Win32_ComputerSystem).Domain;" +
+        "$enc=$null; try { $enc=((Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop).ProtectionStatus -eq 'On') } catch {};" +
+        "$fw=$null; try { $fw=[bool]((Get-NetFirewallProfile -ErrorAction Stop | Where-Object {$_.Enabled}).Count -gt 0) } catch {};" +
+        "$rb=(Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or " +
+        "(Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired');" +
+        "[pscustomobject]@{domain=$d;enc=$enc;fw=$fw;reboot=$rb} | ConvertTo-Json -Compress";
+      const out = await shOut("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], 12000);
+      if (!out) return none;
+      const j = JSON.parse(out);
+      const wgIsWorkgroup = typeof j.domain === "string" && /^workgroup$/i.test(j.domain);
+      return {
+        domain: j.domain ? (wgIsWorkgroup ? "WORKGROUP" : j.domain) : null,
+        diskEncrypted: typeof j.enc === "boolean" ? j.enc : null,
+        firewallEnabled: typeof j.fw === "boolean" ? j.fw : null,
+        rebootPending: typeof j.reboot === "boolean" ? j.reboot : null,
+      };
+    }
+  } catch {
+    /* degrade */
+  }
+  return none;
+}
+
 async function collectInventory() {
-  const [uuidData, sys, cpu, mem, osInfo, disks, users, bios, netIfaces, defaultIface, software] = await Promise.all([
+  const [uuidData, sys, cpu, mem, osInfo, disks, users, bios, netIfaces, defaultIface, posture, software] = await Promise.all([
     si.uuid().catch(() => ({})),
     si.system().catch(() => ({})),
     si.cpu().catch(() => ({})),
@@ -87,6 +145,7 @@ async function collectInventory() {
     si.bios().catch(() => ({})),
     si.networkInterfaces().catch(() => []),
     si.networkInterfaceDefault().catch(() => null),
+    collectPosture(),
     collectSoftware(),
   ]);
 
@@ -142,6 +201,11 @@ async function collectInventory() {
     // Lifecycle
     bootTime,
     timezone,
+    // Security posture + domain join
+    domain: posture.domain,
+    diskEncrypted: posture.diskEncrypted,
+    firewallEnabled: posture.firewallEnabled,
+    rebootPending: posture.rebootPending,
     software,
   };
 }
