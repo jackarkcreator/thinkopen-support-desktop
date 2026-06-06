@@ -369,6 +369,13 @@ function saveState(win) {
 let mainWindow = null;
 let tray = null;
 
+// Windows taskbar grouping: declare the SAME AppUserModelID the NSIS installer
+// bakes into the pinned shortcut (== electron-builder appId). Without this the
+// running window gets a default AUMID that doesn't match the shortcut, so
+// Windows shows a SECOND taskbar button instead of lighting up the pinned icon
+// you launched from. No-op on macOS. Must run before any window is created.
+app.setAppUserModelId("net.thinkopen.support");
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
