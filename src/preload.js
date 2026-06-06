@@ -23,4 +23,7 @@ contextBridge.exposeInMainWorld("minka", {
   onUpdateReady: (cb) =>
     ipcRenderer.on("minka:update-ready", (_e, info) => cb(info)),
   installUpdate: () => ipcRenderer.invoke("minka:install-update"),
+  // Koban inventory agent — returns a one-shot device snapshot (or null). The
+  // web app gates on entitlement and owns the authenticated POST.
+  getInventory: () => ipcRenderer.invoke("minka:get-inventory"),
 });
