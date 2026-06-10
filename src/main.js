@@ -210,6 +210,24 @@ async function collectInventory() {
   };
 }
 
+// Pre-warmed inventory cache. Collection enumerates installed software (WMI on
+// Windows — seconds), and the renderer's DeviceIdentity header chip blocks on
+// the first answer; warming at startup makes it paint instantly. Serve the
+// cached snapshot while fresh; re-collect past the TTL so a laptop that hops
+// networks reports a current localIp.
+const INVENTORY_TTL_MS = 5 * 60 * 1000;
+let inventoryCache = null; // { at: epoch-ms, promise: Promise<snapshot|null> }
+function warmInventory() {
+  inventoryCache = {
+    at: Date.now(),
+    promise: collectInventory().catch((err) => {
+      console.warn("[koban] inventory collection failed:", err && err.message);
+      return null;
+    }),
+  };
+  return inventoryCache.promise;
+}
+
 // ---- Koban presence agent (live session/activity primitive) ---------------
 // Reports the current login session: who's logged in, when the session began
 // (process start ≈ login when autostarted), how long they've been idle, and
@@ -308,13 +326,12 @@ function initAutoUpdates() {
   });
 
   // Koban: the web app asks for a device snapshot; failures resolve null.
-  ipcMain.handle("minka:get-inventory", async () => {
-    try {
-      return await collectInventory();
-    } catch (err) {
-      console.warn("[koban] inventory collection failed:", err && err.message);
-      return null;
+  // Served from the startup-warmed cache while fresh (see warmInventory).
+  ipcMain.handle("minka:get-inventory", () => {
+    if (!inventoryCache || Date.now() - inventoryCache.at > INVENTORY_TTL_MS) {
+      warmInventory();
     }
+    return inventoryCache.promise;
   });
 
   // Koban: the web app asks for a live presence snapshot (~60s); failures → null.
@@ -547,6 +564,9 @@ function buildAppMenu() {
 }
 
 app.whenReady().then(() => {
+  // Kick off inventory collection immediately — it runs in parallel with the
+  // window load, so the DeviceIdentity chip has its answer by first paint.
+  warmInventory();
   buildAppMenu();
   ensureAutostartDefault();
   createWindow();
