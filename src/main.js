@@ -351,6 +351,74 @@ function initAutoUpdates() {
   setInterval(check, 6 * 60 * 60 * 1000);
 }
 
+// Manual "Check for Updates…" from the tray. The timer-based checks are
+// silent by design; a human click deserves an explicit answer for all three
+// outcomes — downloading, up to date, or failed.
+let manualCheckInFlight = false;
+async function checkForUpdatesInteractive() {
+  if (manualCheckInFlight) return;
+  manualCheckInFlight = true;
+  const current = app.getVersion();
+  try {
+    const res = await autoUpdater.checkForUpdates();
+    const next = res && res.updateInfo && res.updateInfo.version;
+    if (next && next !== current) {
+      if (process.platform === "darwin") {
+        // Unsigned mac build can't self-install — point at the release page.
+        const { response } = await dialog.showMessageBox({
+          type: "info",
+          message: `Version ${next} is available`,
+          detail: `You're on v${current}. Automatic install isn't supported on macOS yet — download the new build from the releases page.`,
+          buttons: ["Open Download Page", "Later"],
+        });
+        if (response === 0) {
+          shell.openExternal(
+            "https://github.com/jackarkcreator/thinkopen-support-desktop/releases/latest"
+          );
+        }
+      } else {
+        // autoDownload is already running; surface the window so the branded
+        // "Update ready" modal is actually seen when it fires.
+        showWindow();
+        dialog.showMessageBox({
+          type: "info",
+          message: `Downloading version ${next}…`,
+          detail: `You're on v${current}. You'll be prompted to restart as soon as it's ready.`,
+          buttons: ["OK"],
+        });
+      }
+    } else {
+      dialog.showMessageBox({
+        type: "info",
+        message: "You're up to date",
+        detail: `ThinkOpen Support v${current} is the latest version.`,
+        buttons: ["OK"],
+      });
+    }
+  } catch (err) {
+    dialog.showMessageBox({
+      type: "warning",
+      message: "Couldn't check for updates",
+      detail:
+        (err && err.message ? `${err.message}\n\n` : "") +
+        "Check your internet connection and try again.",
+      buttons: ["OK"],
+    });
+  } finally {
+    manualCheckInFlight = false;
+  }
+}
+
+function showAbout() {
+  dialog.showMessageBox({
+    type: "info",
+    title: "About ThinkOpen Support",
+    message: "ThinkOpen Support",
+    detail: `Version ${app.getVersion()}\nsupport.thinkopen.net\nThinkOpen Inc. · Los Angeles`,
+    buttons: ["OK"],
+  });
+}
+
 const APP_URL = process.env.TO_SUPPORT_URL || "https://support.thinkopen.net";
 
 // Hosts kept INSIDE the window (portal + identity providers). Everything else
@@ -465,6 +533,9 @@ function refreshTrayMenu() {
       },
       { label: "Reload", click: () => mainWindow && mainWindow.webContents.reload() },
       { label: "Privacy & Activity…", click: () => showActivityDisclosure() },
+      { type: "separator" },
+      { label: "Check for Updates…", click: () => checkForUpdatesInteractive() },
+      { label: `About ThinkOpen Support (v${app.getVersion()})`, click: () => showAbout() },
       { type: "separator" },
       {
         label: "Quit ThinkOpen Support",
