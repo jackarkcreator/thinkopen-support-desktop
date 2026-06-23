@@ -294,9 +294,9 @@ function showActivityDisclosure() {
 }
 
 // Auto-update pulls from the app's public GitHub Releases feed (configured in
-// package.json build.publish). Windows (NSIS) self-updates even unsigned; macOS
-// auto-update requires a signed/notarized build, so until we sign it the mac
-// check is a logged no-op (errors are swallowed below, never fatal).
+// package.json build.publish). Both platforms are signed now (mac: Developer ID +
+// notarized; win: Azure Trusted Signing), so mac auto-update is live alongside
+// Windows. Errors are swallowed below, never fatal.
 function initAutoUpdates() {
   autoUpdater.autoDownload = true;
   autoUpdater.on("error", (err) => {
@@ -304,11 +304,9 @@ function initAutoUpdates() {
   });
 
   // When a new version finishes downloading, tell the web app so it can show its
-  // branded "Update ready" modal. Skip macOS until the build is signed/notarized
-  // — quitAndInstall() fails on an unsigned mac, so we don't surface a button
-  // that can't work; the modal lights up on mac automatically once we sign.
+  // branded "Update ready" modal. Runs on both platforms now that the build is
+  // signed + notarized, so quitAndInstall() succeeds on macOS too.
   autoUpdater.on("update-downloaded", (info) => {
-    if (process.platform === "darwin") return;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("minka:update-ready", {
         version: info && info.version,
@@ -363,30 +361,17 @@ async function checkForUpdatesInteractive() {
     const res = await autoUpdater.checkForUpdates();
     const next = res && res.updateInfo && res.updateInfo.version;
     if (next && next !== current) {
-      if (process.platform === "darwin") {
-        // Unsigned mac build can't self-install — point at the release page.
-        const { response } = await dialog.showMessageBox({
-          type: "info",
-          message: `Version ${next} is available`,
-          detail: `You're on v${current}. Automatic install isn't supported on macOS yet — download the new build from the releases page.`,
-          buttons: ["Open Download Page", "Later"],
-        });
-        if (response === 0) {
-          shell.openExternal(
-            "https://github.com/jackarkcreator/thinkopen-support-desktop/releases/latest"
-          );
-        }
-      } else {
-        // autoDownload is already running; surface the window so the branded
-        // "Update ready" modal is actually seen when it fires.
-        showWindow();
-        dialog.showMessageBox({
-          type: "info",
-          message: `Downloading version ${next}…`,
-          detail: `You're on v${current}. You'll be prompted to restart as soon as it's ready.`,
-          buttons: ["OK"],
-        });
-      }
+      // Signed + notarized on both platforms now, so the same auto-download →
+      // "Update ready" modal → quitAndInstall path works on macOS and Windows.
+      // autoDownload is already running; surface the window so the branded modal
+      // is actually seen when it fires.
+      showWindow();
+      dialog.showMessageBox({
+        type: "info",
+        message: `Downloading version ${next}…`,
+        detail: `You're on v${current}. You'll be prompted to restart as soon as it's ready.`,
+        buttons: ["OK"],
+      });
     } else {
       dialog.showMessageBox({
         type: "info",
