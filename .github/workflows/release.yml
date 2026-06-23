@@ -2,8 +2,16 @@ name: Release
 
 # Build + publish installers on a version tag (e.g. `git tag v1.0.0 && git push --tags`).
 # macOS → universal .dmg/.zip; Windows → NSIS .exe. Both are published to THIS repo's
-# GitHub Releases (the public auto-update feed electron-updater reads). Builds are
-# currently UNSIGNED — add Apple notarization + Azure Trusted Signing secrets later.
+# GitHub Releases (the public auto-update feed electron-updater reads).
+#
+# Windows is SIGNED via Azure Trusted Signing — electron-builder 25's native
+# `win.azureSignOptions` (in package.json) signs each artifact DURING the build, so
+# latest.yml hashes match the signed .exe and auto-update stays intact. Auth = the
+# Entra service principal `gh-artifact-signing-thinkopen` via AZURE_TENANT_ID /
+# AZURE_CLIENT_ID / AZURE_CLIENT_SECRET (repo secrets), scoped to the shared `thinkopen`
+# signing account, cert profile thinkopen-public (subject CN "ThinkOpen, Inc."). The
+# AZURE_* env sits on the combined step but only the win target consumes it (mac ignores
+# win config). macOS is still UNSIGNED — add Apple notarization secrets later.
 
 on:
   push:
@@ -46,4 +54,8 @@ jobs:
       - name: Build & publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Azure Trusted Signing (win target only; mac leg ignores these).
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: npx electron-builder ${{ matrix.args }} --publish always

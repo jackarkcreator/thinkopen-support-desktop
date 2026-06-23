@@ -65,7 +65,13 @@
         }
       ],
       "icon": "build/icon.png",
-      "artifactName": "${name}-win-${arch}.${ext}"
+      "artifactName": "${name}-win-${arch}.${ext}",
+      "publisherName": "ThinkOpen, Inc.",
+      "azureSignOptions": {
+        "endpoint": "https://eus.codesigning.azure.net/",
+        "codeSigningAccountName": "thinkopen",
+        "certificateProfileName": "thinkopen-public"
+      }
     },
     "nsis": {
       "oneClick": true,
