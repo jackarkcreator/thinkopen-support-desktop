@@ -4,14 +4,16 @@ name: Release
 # macOS → universal .dmg/.zip; Windows → NSIS .exe. Both are published to THIS repo's
 # GitHub Releases (the public auto-update feed electron-updater reads).
 #
-# Windows is SIGNED via Azure Trusted Signing — electron-builder 25's native
-# `win.azureSignOptions` (in package.json) signs each artifact DURING the build, so
-# latest.yml hashes match the signed .exe and auto-update stays intact. Auth = the
-# Entra service principal `gh-artifact-signing-thinkopen` via AZURE_TENANT_ID /
-# AZURE_CLIENT_ID / AZURE_CLIENT_SECRET (repo secrets), scoped to the shared `thinkopen`
-# signing account, cert profile thinkopen-public (subject CN "ThinkOpen, Inc."). The
-# AZURE_* env sits on the combined step but only the win target consumes it (mac ignores
-# win config). macOS is still UNSIGNED — add Apple notarization secrets later.
+# macOS is SIGNED (Developer ID Application: ThinkOpen LLC, 7C63B47XSL) + NOTARIZED
+# via CSC_LINK / CSC_KEY_PASSWORD (Developer ID .p12) and APPLE_API_KEY_B64 /
+# APPLE_API_KEY_ID / APPLE_API_ISSUER / APPLE_TEAM_ID (App Store Connect API key for
+# notarytool). Windows is SIGNED via Azure Trusted Signing — electron-builder 25's
+# native `win.azureSignOptions` (in package.json) signs each artifact DURING the build
+# so latest.yml hashes match the signed .exe; auth = the Entra SP
+# `gh-artifact-signing-thinkopen` via AZURE_TENANT_ID / AZURE_CLIENT_ID /
+# AZURE_CLIENT_SECRET, cert profile thinkopen-public (CN "ThinkOpen, Inc.").
+# The mac and win build steps are SPLIT BY OS so the Windows job never receives
+# CSC_LINK (on Windows that env names a *Windows* cert and would break the build).
 
 on:
   push:
@@ -51,10 +53,40 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Build & publish
+      # macOS: signed + notarized. notarytool occasionally fails with transient
+      # network errors after a long hang; signing always succeeds before notarization
+      # and a failed notarize publishes no asset, so a full retry of the step is safe.
+      - name: Build & publish (mac — signed + notarized)
+        if: matrix.os == 'macos-latest'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Azure Trusted Signing (win target only; mac leg ignores these).
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "${{ secrets.APPLE_API_KEY_B64 }}" | base64 --decode > "$RUNNER_TEMP/asc_key.p8"
+          export APPLE_API_KEY="$RUNNER_TEMP/asc_key.p8"
+          MAX_ATTEMPTS=3
+          ATTEMPT=0
+          until npx electron-builder ${{ matrix.args }} --publish always; do
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+              echo "Build & notarize failed after $MAX_ATTEMPTS attempts — giving up."
+              exit 1
+            fi
+            echo "Attempt $ATTEMPT failed; retrying in 30s (attempt $((ATTEMPT + 1)) of $MAX_ATTEMPTS)..."
+            sleep 30
+          done
+
+      # Windows: signed via Azure Trusted Signing (NO CSC_* env — that's macOS).
+      # azureSignOptions in package.json + the AZURE_* service-principal creds drive
+      # in-build signing; electron-builder installs the TrustedSigning PS module itself.
+      - name: Build & publish (win — Azure Trusted Signing)
+        if: matrix.os == 'windows-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
