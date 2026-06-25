@@ -283,14 +283,133 @@ const ACTIVITY_DISCLOSURE =
   "whether the screen is locked. It does NOT capture keystrokes, screen " +
   "contents, browsing, or file activity. The data is used for IT support, " +
   "utilization, and billing accuracy. Questions? Contact your IT administrator.";
-function showActivityDisclosure() {
-  dialog.showMessageBox({
+
+// localStorage flag the web presence loop (<KobanAgent>) checks before POSTing
+// named presence. MUST stay in sync with ACTIVITY_ACK_KEY in koban-agent.tsx.
+// The web modal <DesktopActivityGate> sets this — but it only renders inside the
+// main window, so a user whose app auto-launched HIDDEN to the tray never sees
+// it and presence never reports. The helpers below give consent a native home.
+const ACTIVITY_ACK_KEY = "koban.activityAck.v1";
+
+// Read live consent state from the renderer: is this org entitled to activity
+// monitoring, and has THIS install acknowledged it? Our localStorage ack + the
+// same-origin entitlement fetch are only valid on our own origin — on an OAuth
+// interstitial (login.microsoftonline.com, accounts.google.com) we report
+// { ready: false } and touch nothing.
+async function readActivityState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ready: false };
+  try {
+    return await mainWindow.webContents.executeJavaScript(`(async () => {
+      try {
+        const h = location.hostname;
+        if (h !== "thinkopen.net" && !h.endsWith(".thinkopen.net")) return { ready: false };
+        let acknowledged = false;
+        try { acknowledged = localStorage.getItem(${JSON.stringify(ACTIVITY_ACK_KEY)}) === "1"; } catch {}
+        let activity = false;
+        try {
+          const r = await fetch("/api/support/inventory", { cache: "no-store" });
+          if (r.ok) { const j = await r.json(); activity = !!j.activity; }
+        } catch {}
+        return { ready: true, activity, acknowledged };
+      } catch { return { ready: false }; }
+    })()`);
+  } catch {
+    return { ready: false };
+  }
+}
+
+// Grant consent from the native side: set the same localStorage ack the web
+// modal sets, then nudge the web presence loop to beat immediately (the shell
+// holds NO presence-POST logic — orchestration stays in the web app, so cadence
+// can change with a deploy). If nothing is listening, the 30s loop still reports.
+async function grantActivityConsent() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    await mainWindow.webContents.executeJavaScript(`(() => {
+      try { localStorage.setItem(${JSON.stringify(ACTIVITY_ACK_KEY)}, "1"); } catch {}
+      try { window.dispatchEvent(new CustomEvent("koban:activity-ack")); } catch {}
+    })()`);
+  } catch {
+    /* non-fatal — the 30s presence loop still picks up the ack */
+  }
+}
+
+// Revoke consent on this device (compliance: opt-out must be as easy as opt-in).
+async function revokeActivityConsent() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    await mainWindow.webContents.executeJavaScript(
+      `try { localStorage.removeItem(${JSON.stringify(ACTIVITY_ACK_KEY)}); } catch {}`
+    );
+  } catch {
+    /* non-fatal */
+  }
+}
+
+// The actionable Privacy & Activity center (tray + first-run on a hidden launch).
+// Always shows what is collected and why BEFORE enabling (CA / Mexico LFPDPPP):
+//   • not entitled / not yet on our origin → read-only notice (nothing to toggle)
+//   • entitled + acknowledged             → notice + "Turn off reporting" (revoke)
+//   • entitled + NOT acknowledged         → "Enable reporting" / "Not now" consent
+async function openActivityCenter() {
+  const state = await readActivityState();
+
+  if (!state.ready || !state.activity) {
+    await dialog.showMessageBox({
+      type: "info",
+      title: "Privacy & Activity Monitoring",
+      message: "Koban activity monitoring",
+      detail: ACTIVITY_DISCLOSURE,
+      buttons: ["OK"],
+    });
+    return;
+  }
+
+  if (state.acknowledged) {
+    const { response } = await dialog.showMessageBox({
+      type: "info",
+      title: "Privacy & Activity Monitoring",
+      message: "Activity reporting is ON for this device",
+      detail:
+        ACTIVITY_DISCLOSURE +
+        "\n\nYou can turn reporting off on this device at any time.",
+      buttons: ["Done", "Turn off reporting"],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (response === 1) await revokeActivityConsent();
+    return;
+  }
+
+  const { response } = await dialog.showMessageBox({
     type: "info",
     title: "Privacy & Activity Monitoring",
-    message: "Koban activity monitoring",
-    detail: ACTIVITY_DISCLOSURE,
-    buttons: ["OK"],
+    message: "Enable activity reporting?",
+    detail:
+      ACTIVITY_DISCLOSURE +
+      "\n\nChoose “Enable reporting” to allow this device to report session " +
+      "presence as described above. You can turn it off again at any time.",
+    buttons: ["Enable reporting", "Not now"],
+    defaultId: 0,
+    cancelId: 1,
   });
+  if (response === 0) await grantActivityConsent();
+}
+
+// On a hidden-to-tray launch the in-window consent modal is never seen, so
+// consent would never be obtained and presence would never report. Surface it
+// natively, once, after the renderer + session cookie have settled. No-op when
+// already acknowledged or the org isn't entitled. Visible launches are handled
+// by the in-window <DesktopActivityGate>, so we don't double-prompt.
+async function maybePromptActivityConsent() {
+  try {
+    const state = await readActivityState();
+    if (state.ready && state.activity && !state.acknowledged) {
+      await openActivityCenter();
+    }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 // Auto-update pulls from the app's public GitHub Releases feed (configured in
@@ -517,7 +636,7 @@ function refreshTrayMenu() {
         },
       },
       { label: "Reload", click: () => mainWindow && mainWindow.webContents.reload() },
-      { label: "Privacy & Activity…", click: () => showActivityDisclosure() },
+      { label: "Privacy & Activity…", click: () => openActivityCenter() },
       { type: "separator" },
       { label: "Check for Updates…", click: () => checkForUpdatesInteractive() },
       { label: `About ThinkOpen Support (v${app.getVersion()})`, click: () => showAbout() },
@@ -628,6 +747,12 @@ app.whenReady().then(() => {
   createWindow();
   buildTray();
   initAutoUpdates();
+
+  // Hidden-to-tray launch can't show the in-window consent modal — surface the
+  // native consent once the renderer + session cookie have settled so presence
+  // can actually start. No-op when already acknowledged or not entitled.
+  if (launchedHidden()) setTimeout(maybePromptActivityConsent, 12000);
+
   app.on("activate", () => showWindow());
 });
 

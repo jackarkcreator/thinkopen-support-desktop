@@ -2,8 +2,8 @@
 
 > **Living doc.** Update this at the end of any session that changes the project, then commit. It round-trips between machines via git — it is how office-Claude and travel-Claude stay in sync. Keep it short and current; move durable rules to `CLAUDE.md`.
 
-**Last updated:** 2026-06-15 · **Branch:** `main` — *state reflects the milestones below; run `git log` for live HEAD (no pinned SHA here — it self-invalidates on the next commit).*
-**Distribution:** GitHub Releases at `github.com/jackarkcreator/thinkopen-support-desktop` (public repo, electron-updater auto-update feed). **Current version: v1.0.14.**
+**Last updated:** 2026-06-24 · **Branch:** `main` — *state reflects the milestones below; run `git log` for live HEAD (no pinned SHA here — it self-invalidates on the next commit).*
+**Distribution:** GitHub Releases at `github.com/jackarkcreator/thinkopen-support-desktop` (public repo, electron-updater auto-update feed). **Current version: v1.0.19.** (Both platforms signed: mac notarized v1.0.17, win Azure v1.0.16, mac auto-update enabled v1.0.18.)
 
 ---
 
@@ -11,6 +11,7 @@
 
 **All shipped, CI green, Keno-verified:**
 
+- **v1.0.19** — **Koban presence consent now works for hidden-to-tray launches.** The presence POST was gated behind a localStorage ack (`koban.activityAck.v1`) set ONLY by the in-window web modal `<DesktopActivityGate>`. A user whose app auto-launches hidden at login (`startHidden`) never saw that modal, so presence (`device_presence`) never reported even with `activity_enabled=true`. Fix: the native tray **"Privacy & Activity…"** is now an actionable consent center (`openActivityCenter()`) — reads live entitlement + ack from the renderer via `executeJavaScript`, then **Enable / Not now** (sets the same ack + fires a `koban:activity-ack` event the web `<KobanAgent>` listens for → instant beat; the 30s loop reports regardless), a **Turn off reporting** revoke once on, or the read-only notice when there's nothing to toggle. Plus: a **hidden launch auto-surfaces** the consent once (`maybePromptActivityConsent`, 12s after settle, gated on `launchedHidden()`) so presence starts without ever opening the window. Visible launches still use the web modal (no double-prompt). Consent UX still shows what's collected before enabling (CA / Mexico LFPDPPP). **Web side:** `koban-agent.tsx` listens for `koban:activity-ack` — ships independently via Vercel; the shell fix works without it via the existing 30s loop.
 - **v1.0.0** (`2026-06-04`) — first release; universal mac dmg + win x64 NSIS exe; navy frameless window; `window.minka` bridge; `isDesktop` flag lights up portal chrome with zero web changes; co-managed routing proven (JC → org-admin admin shell).
 - **v1.0.1** — Windows navy titleBarOverlay + branded "Update ready" modal (web-side modal, shell exposes bridge).
 - **v1.0.2** — silent NSIS oneClick installer (no wizard on every update); friendly update modal copy.
