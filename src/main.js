@@ -3,7 +3,7 @@
 // clean, branded app instead of a browser tab.
 //
 // Chrome matches the Staff (Minka) app for brand consistency: a frameless
-// window with the macOS traffic lights inset over a navy (#0A2540) title bar
+// window with the macOS traffic lights inset over a navy (#131722) title bar
 // that the WEB APP paints itself. login / portal / org-admin admin all render
 // their navy bar gated to `window.minka.isDesktop`; the preload sets that flag
 // (we reuse Minka's desktop bridge contract verbatim), so login + the org-admin
@@ -302,7 +302,8 @@ async function readActivityState() {
     return await mainWindow.webContents.executeJavaScript(`(async () => {
       try {
         const h = location.hostname;
-        if (h !== "thinkopen.net" && !h.endsWith(".thinkopen.net")) return { ready: false };
+        const firstParty = h === "okvia.io" || h.endsWith(".okvia.io") || h === "thinkopen.net" || h.endsWith(".thinkopen.net");
+        if (!firstParty) return { ready: false };
         let acknowledged = false;
         try { acknowledged = localStorage.getItem(${JSON.stringify(ACTIVITY_ACK_KEY)}) === "1"; } catch {}
         let activity = false;
@@ -495,7 +496,7 @@ async function checkForUpdatesInteractive() {
       dialog.showMessageBox({
         type: "info",
         message: "You're up to date",
-        detail: `ThinkOpen Support v${current} is the latest version.`,
+        detail: `Okvia Support v${current} is the latest version.`,
         buttons: ["OK"],
       });
     }
@@ -516,18 +517,21 @@ async function checkForUpdatesInteractive() {
 function showAbout() {
   dialog.showMessageBox({
     type: "info",
-    title: "About ThinkOpen Support",
-    message: "ThinkOpen Support",
-    detail: `Version ${app.getVersion()}\nsupport.thinkopen.net\nThinkOpen Inc. · Los Angeles`,
+    title: "About Okvia Support",
+    message: "Okvia Support",
+    detail: `Version ${app.getVersion()}\nsupport.okvia.io`,
     buttons: ["OK"],
   });
 }
 
-const APP_URL = process.env.TO_SUPPORT_URL || "https://support.thinkopen.net";
+const APP_URL = process.env.TO_SUPPORT_URL || "https://support.okvia.io";
 
 // Hosts kept INSIDE the window (portal + identity providers). Everything else
 // opens in the user's default browser.
 const INTERNAL_HOSTS = [
+  "support.okvia.io",
+  "staff.okvia.io",
+  "okvia.io",
   "support.thinkopen.net",
   "staff.thinkopen.net",
   "thinkopen.net",
@@ -563,7 +567,7 @@ let tray = null;
 // running window gets a default AUMID that doesn't match the shortcut, so
 // Windows shows a SECOND taskbar button instead of lighting up the pinned icon
 // you launched from. No-op on macOS. Must run before any window is created.
-app.setAppUserModelId("net.thinkopen.support");
+app.setAppUserModelId("io.okvia.support");
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -610,7 +614,7 @@ function buildTray() {
   );
   img.setTemplateImage(true);
   tray = new Tray(img);
-  tray.setToolTip("ThinkOpen Support");
+  tray.setToolTip("Okvia Support");
   refreshTrayMenu();
   tray.on("click", () => showWindow());
 }
@@ -620,7 +624,7 @@ function refreshTrayMenu() {
   const loginOn = app.getLoginItemSettings().openAtLogin;
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Open ThinkOpen Support", click: () => showWindow() },
+      { label: "Open Okvia Support", click: () => showWindow() },
       { type: "separator" },
       {
         label: "Open at Login",
@@ -639,10 +643,10 @@ function refreshTrayMenu() {
       { label: "Privacy & Activity…", click: () => openActivityCenter() },
       { type: "separator" },
       { label: "Check for Updates…", click: () => checkForUpdatesInteractive() },
-      { label: `About ThinkOpen Support (v${app.getVersion()})`, click: () => showAbout() },
+      { label: `About Okvia Support (v${app.getVersion()})`, click: () => showAbout() },
       { type: "separator" },
       {
-        label: "Quit ThinkOpen Support",
+        label: "Quit Okvia Support",
         accelerator: "Command+Q",
         click: () => {
           app.isQuitting = true;
@@ -656,7 +660,7 @@ function refreshTrayMenu() {
 function createWindow() {
   const s = loadState();
   const startHidden = launchedHidden();
-  // The web app paints its own navy (#0A2540) title bar (DesktopTitleBar, h-10
+  // The web app paints its own navy (#131722) title bar (DesktopTitleBar, h-10
   // = 40px) gated to window.minka.isDesktop. We hide the OS frame so that navy
   // bar IS the window title bar on every platform:
   //   macOS  → hiddenInset + traffic lights inset over the navy bar.
@@ -674,15 +678,15 @@ function createWindow() {
     minWidth: 800,
     minHeight: 560,
     show: !startHidden, // start in the tray when auto-launched at login
-    backgroundColor: "#0A2540", // ThinkOpen navy — matches the web app's navy bar, no flash
-    title: "ThinkOpen Support",
+    backgroundColor: "#131722", // Okvia ink — matches the web app's title bar, no flash
+    title: "Okvia Support",
     // Keep the native menu off the chrome on Win/Linux so it doesn't sit below
     // the navy bar and break the look; Alt still reveals it (copy/paste/reload).
     autoHideMenuBar: !isMac,
     titleBarStyle: isMac ? "hiddenInset" : "hidden",
     ...(isMac
       ? { trafficLightPosition: { x: 18, y: 13 } }
-      : { titleBarOverlay: { color: "#0A2540", symbolColor: "#ffffff", height: 40 } }),
+      : { titleBarOverlay: { color: "#131722", symbolColor: "#ffffff", height: 40 } }),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

@@ -1,8 +1,8 @@
 {
   "name": "thinkopen-support-desktop",
-  "productName": "ThinkOpen Support",
-  "version": "1.0.19",
-  "description": "ThinkOpen Support — client desktop app",
+  "productName": "Okvia Support",
+  "version": "1.1.0",
+  "description": "Okvia Support — client desktop app",
   "author": "ThinkOpen Inc. <info@thinkopen.net>",
   "license": "UNLICENSED",
   "private": true,
@@ -26,8 +26,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "net.thinkopen.support",
-    "productName": "ThinkOpen Support",
+    "appId": "io.okvia.support",
+    "productName": "Okvia Support",
     "copyright": "Copyright © 2026 ThinkOpen Inc.",
     "directories": {
       "output": "dist",
@@ -38,7 +38,7 @@
         "provider": "github",
         "owner": "jackarkcreator",
         "repo": "thinkopen-support-desktop",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ],
     "mac": {
@@ -57,7 +57,7 @@
       "notarize": true
     },
     "dmg": {
-      "title": "ThinkOpen Support ${version}"
+      "title": "Okvia Support ${version}"
     },
     "win": {
       "target": [
@@ -71,7 +71,7 @@
       "icon": "build/icon.png",
       "artifactName": "${name}-win-${arch}.${ext}",
       "publisherName": "ThinkOpen, Inc.",
-      "executableName": "ThinkOpenSupport",
+      "executableName": "OkviaSupport",
       "azureSignOptions": {
         "endpoint": "https://eus.codesigning.azure.net/",
         "codeSigningAccountName": "thinkopen",
@@ -84,7 +84,7 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ThinkOpen Support"
+      "shortcutName": "Okvia Support"
     }
   }
 }
