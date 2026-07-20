@@ -1,7 +1,7 @@
 {
   "name": "thinkopen-support-desktop",
   "productName": "Okvia Support",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Okvia Support — client desktop app",
   "author": "ThinkOpen Inc. <info@thinkopen.net>",
   "license": "UNLICENSED",
@@ -26,7 +26,7 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "io.okvia.support",
+    "appId": "net.thinkopen.support",
     "productName": "Okvia Support",
     "copyright": "Copyright © 2026 ThinkOpen Inc.",
     "directories": {
