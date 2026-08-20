@@ -587,15 +587,115 @@ function launchedHidden() {
   }
 }
 
-// First launch only: default to start-at-login (hidden to tray) so presence
-// reporting is continuous without the user opting in. Forced ONCE (marker file)
-// so a later opt-out via the tray sticks across updates.
+// ---- Autostart (open at login) --------------------------------------------
+// We default to start-at-login (hidden to tray) so presence reporting is
+// continuous, and the tray "Open at Login" checkbox lets the user turn it off.
+//
+// Until v1.1.3 that default was forced ONCE and recorded with a marker file
+// (`autostart-initialized`). A marker only proves we ran the code — it proves
+// nothing about the OS. Production 2026-08-19: the macOS login item had drifted
+// to a stale dist build of a DIFFERENT app bundle while the marker was already
+// stamped, so the staff app never auto-started and could not self-heal; the only
+// fix was deleting the marker by hand.
+//
+// So: record the user's DECISION in a pref file, and assert the OS STATE on
+// every launch. `registeredFor` stamps which app bundle we last registered, so a
+// login item that no longer points at the running bundle is detected as drift
+// rather than trusted. We only re-apply when the real state disagrees — never
+// blindly on every launch, and never over a recorded opt-out.
+const autostartPrefFile = () => path.join(app.getPath("userData"), "autostart.json");
+
+function readAutostartPref() {
+  try {
+    const pref = JSON.parse(fs.readFileSync(autostartPrefFile(), "utf8"));
+    return pref && typeof pref === "object" ? pref : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAutostartPref(patch) {
+  try {
+    const { updatedAt: _was, ...current } = readAutostartPref();
+    const merged = { ...current, ...patch };
+    // No-op writes would touch the file on every launch; skip them.
+    if (JSON.stringify(current) === JSON.stringify(merged)) return;
+    merged.updatedAt = new Date().toISOString();
+    fs.writeFileSync(autostartPrefFile(), JSON.stringify(merged, null, 2));
+  } catch {
+    /* non-fatal */
+  }
+}
+
+// The identity a login item for THIS build points at. On macOS the item targets
+// the .app bundle containing our binary, so the bundle path is the identity;
+// elsewhere the executable path is.
+function autostartTargetPath() {
+  const exe = app.getPath("exe") || process.execPath;
+  if (process.platform !== "darwin") return exe;
+  const i = exe.indexOf(".app/Contents/MacOS/");
+  return i === -1 ? exe : exe.slice(0, i + 4);
+}
+
+function applyAutostart() {
+  app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true, args: ["--hidden"] });
+  writeAutostartPref({ userDisabled: false, registeredFor: autostartTargetPath() });
+}
+
+// Called from the tray checkbox — this is the ONE place a user choice is made,
+// so it is the one place that writes `userDisabled`.
+function setAutostartEnabled(enabled) {
+  try {
+    if (enabled) {
+      applyAutostart();
+    } else {
+      app.setLoginItemSettings({ openAtLogin: false });
+      writeAutostartPref({ userDisabled: true, registeredFor: null });
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
 function ensureAutostartDefault() {
   try {
-    const marker = path.join(app.getPath("userData"), "autostart-initialized");
-    if (fs.existsSync(marker)) return;
-    app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true, args: ["--hidden"] });
-    fs.writeFileSync(marker, new Date().toISOString());
+    // Dev runs (`npm start`) would register the Electron binary itself as the
+    // login item — the exact "item points at some other bundle" failure. Never
+    // touch login items from an unpackaged run.
+    if (!app.isPackaged) return;
+
+    const pref = readAutostartPref();
+
+    // Deliberate opt-out via the tray checkbox — never override it.
+    if (pref.userDisabled === true) return;
+
+    const settings = app.getLoginItemSettings();
+    const target = autostartTargetPath();
+
+    // macOS 13+ (SMAppService): "requires-approval" means the user or MDM
+    // disabled us in System Settings › General › Login Items. Re-registering
+    // does not clear that, so record it and leave their choice alone.
+    if (settings.status === "requires-approval") {
+      writeAutostartPref({ osApprovalPending: true, registeredFor: target });
+      return;
+    }
+
+    // Healthy = the OS says we launch at login AND the item we registered is the
+    // bundle now running. A missing `registeredFor` means this profile predates
+    // the pref file (marker era) — its state is unverified, so assert it once.
+    const healthy = settings.openAtLogin === true && pref.registeredFor === target;
+    if (healthy) {
+      if (pref.osApprovalPending) writeAutostartPref({ osApprovalPending: false });
+      return;
+    }
+
+    applyAutostart();
+    // Retire the marker so a downgrade re-asserts rather than trusting a lie.
+    try {
+      fs.unlinkSync(path.join(app.getPath("userData"), "autostart-initialized"));
+    } catch {
+      /* absent is fine */
+    }
   } catch {
     /* non-fatal */
   }
@@ -631,11 +731,7 @@ function refreshTrayMenu() {
         type: "checkbox",
         checked: loginOn,
         click: (item) => {
-          app.setLoginItemSettings({
-            openAtLogin: item.checked,
-            openAsHidden: true,
-            args: ["--hidden"],
-          });
+          setAutostartEnabled(item.checked);
           refreshTrayMenu();
         },
       },
