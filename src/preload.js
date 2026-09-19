@@ -4,9 +4,9 @@
 // are owned by the web app, gated to window.minka.isDesktop — so this only sets
 // the flag (no DOM/CSS injection).
 //
-// focusWindow/setBadge are stubs here (no tray/Realtime in the Support app yet);
-// they keep the bridge shape identical to Staff so the web code is portable and
-// future client-portal notifications can wire the IPC without a contract change.
+// focusWindow brings the window forward (1.2.0: remote-support notification
+// click); setBadge is still a stub. The bridge shape stays identical to Staff so
+// the web code is portable.
 
 const { contextBridge, ipcRenderer } = require("electron");
 
@@ -15,7 +15,7 @@ contextBridge.exposeInMainWorld("minka", {
   app: "support",
   version: "",
   platform: process.platform,
-  focusWindow: () => {},
+  focusWindow: () => ipcRenderer.send("minka:focus-window"),
   setBadge: () => {},
   // Auto-update bridge: the web app shows a branded "Update ready" modal when
   // the shell finishes downloading a new version, and installUpdate() triggers
@@ -29,4 +29,7 @@ contextBridge.exposeInMainWorld("minka", {
   // Koban presence agent — returns a live session snapshot (or null). The web
   // app gates on the `activity` entitlement + disclosure and owns the POST.
   getPresence: () => ipcRenderer.invoke("minka:get-presence"),
+  // "Start remote support" (1.2.0): fetch, signature-check and launch the
+  // ThinkOpen Support client; resolves { ok, hostname, error? }.
+  startRemoteSupport: () => ipcRenderer.invoke("minka:start-remote-support"),
 });

@@ -27,6 +27,7 @@ const os = require("node:os");
 const { execFile } = require("node:child_process");
 const { autoUpdater } = require("electron-updater");
 const si = require("systeminformation");
+const { startRemoteSupport } = require("./remote-support");
 
 // ---- Koban inventory agent (data-collection primitive) --------------------
 // Mirrors the Staff (Minka) app. The web app (window.minka.getInventory)
@@ -441,6 +442,23 @@ function initAutoUpdates() {
   // version. setImmediate lets the IPC reply flush before the app quits.
   ipcMain.handle("minka:install-update", () => {
     setImmediate(() => autoUpdater.quitAndInstall());
+  });
+
+  // "Start remote support" (1.2.0): fetch + verify + launch the ThinkOpen
+  // Support client for the ticket the user is on. Only our portal page may ask.
+  ipcMain.handle("minka:start-remote-support", (e) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents || !isInternalHost(e.senderFrame?.url || "")) {
+      return { ok: false, error: "launch_failed" };
+    }
+    return startRemoteSupport(mainWindow);
+  });
+
+  // Notification click → bring the portal to the front (it may be in the tray).
+  ipcMain.on("minka:focus-window", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
 
   // Koban: the web app asks for a device snapshot; failures resolve null.
