@@ -24,8 +24,10 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // re-fetch daily so rebuilds reach cl
 // Signer pins. Windows: read from the 2026-09-18 build (Authenticode chain
 // DigiCert Trusted G4 Code Signing → O=Purslane, serialNumber=53481265A).
 const WIN_SIGNER_MUST_CONTAIN = ["O=Purslane", "SERIALNUMBER=53481265A"];
-// macOS: Developer ID team of the notarized custom client (codesign -dv).
-const MAC_TEAM_ID = "__PIN_ME__";
+// macOS: Developer ID team of the notarized custom client, read from the
+// 2026-09-19 build (codesign -dv: "Developer ID Application: zhou huabing
+// (HZF9JMC8YN)", RustDesk's build service; bundle net.thinkopen.remotesupport).
+const MAC_TEAM_ID = "HZF9JMC8YN";
 
 let busy = false;
 
