@@ -59,8 +59,10 @@ A thin **Electron shell** that wraps `support.thinkopen.net` so clients (and co-
 **Navy installer title bar — DO NOT RE-ATTEMPT:**
 - Coloring the NSIS oneClick installer window navy was attempted and abandoned (v1.0.6–v1.0.7, deleted tags, 3 failed builds). The only correctly-timed NSIS hook (`customCheckAppRunning`) is a global replacement that must re-insert the default running-app check macro — which fails to compile the uninstaller in NSIS's separate pass. No guard fixes it. `build/installer.nsh` is DPI-awareness only; that is the settled stopping point.
 
-**macOS auto-update:**
-- `quitAndInstall()` fails on an unsigned/unnotarized Mac build. The `update-downloaded` handler in `src/main.js` explicitly skips macOS (`if (process.platform === "darwin") return`). Mac users must manually download new `.dmg` until signing lands. The web app's "Update ready" modal mirrors this gate. Do not remove the platform guard until the build is notarized.
+**macOS auto-update (live since v1.0.18; lifecycle hardened v1.2.2):**
+- 🧨 **Never call `autoUpdater.checkForUpdates()` directly — go through `runUpdateCheck(reason)`.** On macOS every check makes Squirrel.Mac prune + re-stage the downloaded bundle; a check after staging deletes it and ShipIt fails ("Failed to copy bundle … no such file") → old version relaunches. Once `updateReady` is set, no more checks this session; manual check re-offers the restart.
+- "Ready" is announced (web modal `minka:update-ready`) only after BOTH electron-updater's `update-downloaded` AND (mac) the native `require("electron").autoUpdater` `update-downloaded`.
+- `installUpdate()` sets `app.isQuitting` (close-to-tray would swallow the close) + 10s `app.exit` watchdog. Log: `~/Library/Logs/<App>/updater.log` (electron-updater logger wired in) — read it first when an update "doesn't take".
 
 **`window.minka` bridge contract:**
 - The web app (`~/Ccode/thinkopen-net`) reads `window.minka.isDesktop`, `window.minka.app`, `window.minka.platform`, `window.minka.onUpdateReady`, `window.minka.installUpdate`, `window.minka.getInventory`, `window.minka.getPresence`. Changing any of these names requires a matching web deploy. The type declarations live in `thinkopen-net/src/types/minka-desktop.d.ts` — keep in sync.

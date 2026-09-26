@@ -417,32 +417,186 @@ async function maybePromptActivityConsent() {
 // Auto-update pulls from the app's public GitHub Releases feed (configured in
 // package.json build.publish). Both platforms are signed now (mac: Developer ID +
 // notarized; win: Azure Trusted Signing), so mac auto-update is live alongside
-// Windows. Errors are swallowed below, never fatal.
+// Windows. Errors are swallowed, never fatal.
+//
+// Update lifecycle (1.2.2 — port of the Okvia staff 1.1.7 "takes 2-3 quits to
+// update" fix). Two bugs fixed:
+//  1. Every checkForUpdates() makes Squirrel.Mac prune its staged update dir and
+//     re-stage. A check that lands while ShipIt is waiting to install deletes the
+//     bundle out from under it ("Failed to copy bundle … no such file") and the
+//     app relaunches on the old version. → once an update is staged, never check
+//     again this session; a manual check just re-offers the restart.
+//  2. electron-updater fires update-downloaded when ITS download finishes, before
+//     Squirrel has copied + unpacked the bundle; "Restart now" then waits silently.
+//     → on macOS, only announce "ready" once Squirrel's native update-downloaded
+//     fires too.
+// Plus a quit watchdog and a persistent log (~/Library/Logs/<app>/updater.log).
+let manualUpdateCheck = false;
+let updateInFlight = false; // a check or download is running
+let updateInFlightAt = 0;
+let downloadedInfo = null; // electron-updater finished downloading
+let squirrelStaged = process.platform !== "darwin"; // Windows has no second stage
+let updateReady = null; // info, once installable (never check again after this)
+let installing = false;
+
+function updaterLog(level, ...args) {
+  const line = `${new Date().toISOString()} [${level}] ${args
+    .map((a) => (a instanceof Error ? a.stack || a.message : typeof a === "string" ? a : JSON.stringify(a)))
+    .join(" ")}\n`;
+  try {
+    const file = path.join(app.getPath("logs"), "updater.log");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try {
+      if (fs.statSync(file).size > 1024 * 1024) fs.renameSync(file, file + ".1");
+    } catch { /* first write */ }
+    fs.appendFileSync(file, line);
+  } catch { /* logging must never break updates */ }
+}
+
+function showReadyPrompt(info) {
+  return dialog
+    .showMessageBox({
+      type: "info",
+      title: "Check for Updates",
+      message: `Okvia Support ${info && info.version} is ready to install`,
+      detail: "Restart now to finish updating.",
+      buttons: ["Restart now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    .then(({ response }) => {
+      if (response === 0) installUpdate();
+    });
+}
+
+// Both stages done → tell the web app (branded modal) and, for a manual check,
+// show the native prompt too.
+function maybeAnnounceReady() {
+  if (updateReady || !downloadedInfo || !squirrelStaged) return;
+  updateReady = downloadedInfo;
+  updateInFlight = false;
+  updaterLog("info", `update ready to install: ${updateReady.version}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("minka:update-ready", {
+      version: updateReady.version,
+      releaseName: updateReady.releaseName,
+      releaseNotes: typeof updateReady.releaseNotes === "string" ? updateReady.releaseNotes : null,
+    });
+  }
+  if (manualUpdateCheck) {
+    manualUpdateCheck = false;
+    showReadyPrompt(updateReady);
+  }
+}
+
+function installUpdate() {
+  if (installing || !updateReady) return;
+  installing = true;
+  app.isQuitting = true; // close-to-tray must not swallow the window close
+  updaterLog("info", `quitAndInstall → ${updateReady.version}`);
+  setImmediate(() => autoUpdater.quitAndInstall());
+  // If something still holds the process open, force the exit — ShipIt (mac) /
+  // the NSIS installer (win) is already waiting on our termination to install.
+  setTimeout(() => {
+    updaterLog("warn", "app still running 10s after quitAndInstall — forcing exit");
+    app.exit(0);
+  }, 10000).unref();
+}
+
+function runUpdateCheck(reason) {
+  if (updateReady || installing) {
+    updaterLog("info", `check (${reason}) skipped: update already staged`);
+    return false;
+  }
+  // A hung download (no error, no downloaded) must not block checks forever.
+  if (updateInFlight && Date.now() - updateInFlightAt < 30 * 60 * 1000) {
+    updaterLog("info", `check (${reason}) skipped: check/download in flight`);
+    return false;
+  }
+  updateInFlight = true;
+  updateInFlightAt = Date.now();
+  updaterLog("info", `check (${reason})`);
+  autoUpdater.checkForUpdates().catch(() => {
+    /* surfaced by the "error" event */
+  });
+  return true;
+}
+
 function initAutoUpdates() {
   autoUpdater.autoDownload = true;
-  autoUpdater.on("error", (err) => {
-    console.warn("[autoUpdater]", err == null ? "unknown error" : err.message || err);
-  });
+  autoUpdater.logger = {
+    info: (...a) => updaterLog("info", ...a),
+    warn: (...a) => updaterLog("warn", ...a),
+    error: (...a) => updaterLog("error", ...a),
+    debug: (...a) => updaterLog("debug", ...a),
+  };
 
-  // When a new version finishes downloading, tell the web app so it can show its
-  // branded "Update ready" modal. Runs on both platforms now that the build is
-  // signed + notarized, so quitAndInstall() succeeds on macOS too.
-  autoUpdater.on("update-downloaded", (info) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("minka:update-ready", {
-        version: info && info.version,
-        releaseName: info && info.releaseName,
-        releaseNotes:
-          info && typeof info.releaseNotes === "string" ? info.releaseNotes : null,
+  // macOS second stage: Squirrel has copied + unpacked the bundle and ShipIt is
+  // armed. Only now is quitAndInstall instant and safe.
+  if (process.platform === "darwin") {
+    require("electron").autoUpdater.on("update-downloaded", () => {
+      updaterLog("info", "Squirrel.Mac staged the update");
+      squirrelStaged = true;
+      maybeAnnounceReady();
+    });
+  }
+
+  autoUpdater.on("error", (err) => {
+    const msg = err == null ? "unknown error" : err.message || String(err);
+    updaterLog("error", msg);
+    updateInFlight = false;
+    if (!updateReady) {
+      // Start clean next time (a half-finished stage is useless).
+      downloadedInfo = null;
+      squirrelStaged = process.platform !== "darwin";
+    }
+    if (manualUpdateCheck) {
+      manualUpdateCheck = false;
+      dialog.showMessageBox({
+        type: "warning",
+        message: "Couldn't check for updates",
+        detail: `${msg}\n\nCheck your internet connection and try again.`,
+        buttons: ["OK"],
       });
     }
   });
 
-  // "Install & Restart" from the modal → close, install, relaunch on the new
-  // version. setImmediate lets the IPC reply flush before the app quits.
-  ipcMain.handle("minka:install-update", () => {
-    setImmediate(() => autoUpdater.quitAndInstall());
+  // No newer version on the feed → reassure a manual checker.
+  autoUpdater.on("update-not-available", () => {
+    updateInFlight = false;
+    if (!manualUpdateCheck) return;
+    manualUpdateCheck = false;
+    dialog.showMessageBox({
+      type: "info",
+      message: "You're up to date",
+      detail: `Okvia Support v${app.getVersion()} is the latest version.`,
+      buttons: ["OK"],
+    });
   });
+
+  // A newer version exists → autoDownload pulls it; tell a manual checker it's
+  // on the way and surface the window so the branded modal is seen when ready.
+  autoUpdater.on("update-available", (info) => {
+    if (!manualUpdateCheck) return;
+    showWindow();
+    dialog.showMessageBox({
+      type: "info",
+      message: `Downloading version ${info && info.version}…`,
+      detail: `You're on v${app.getVersion()}. You'll be prompted to restart as soon as it's ready.`,
+      buttons: ["OK"],
+    });
+  });
+
+  // First stage done (electron-updater's download). On Windows that's installable;
+  // on macOS we still wait for Squirrel (above).
+  autoUpdater.on("update-downloaded", (info) => {
+    updaterLog("info", `downloaded ${info && info.version}`);
+    downloadedInfo = info || {};
+    maybeAnnounceReady();
+  });
+
+  // "Install & Restart" from the web modal.
+  ipcMain.handle("minka:install-update", () => installUpdate());
 
   // "Start remote support" (1.2.0): fetch + verify + launch the ThinkOpen
   // Support client for the ticket the user is on. Only our portal page may ask.
@@ -480,55 +634,29 @@ function initAutoUpdates() {
     }
   });
 
-  // We own the update UI now, so checkForUpdates (not ...AndNotify, which would
-  // also pop a native OS notification and double up with the modal).
-  const check = () => autoUpdater.checkForUpdates().catch(() => {});
-  setTimeout(check, 8000);
-  setInterval(check, 6 * 60 * 60 * 1000);
+  // We own the update UI → checkForUpdates (not ...AndNotify, which would also
+  // pop a native OS notification that double-ups with the modal).
+  setTimeout(() => runUpdateCheck("launch"), 8000);
+  setInterval(() => runUpdateCheck("interval"), 6 * 60 * 60 * 1000);
 }
 
-// Manual "Check for Updates…" from the tray. The timer-based checks are
-// silent by design; a human click deserves an explicit answer for all three
-// outcomes — downloading, up to date, or failed.
-let manualCheckInFlight = false;
-async function checkForUpdatesInteractive() {
-  if (manualCheckInFlight) return;
-  manualCheckInFlight = true;
-  const current = app.getVersion();
-  try {
-    const res = await autoUpdater.checkForUpdates();
-    const next = res && res.updateInfo && res.updateInfo.version;
-    if (next && next !== current) {
-      // Signed + notarized on both platforms now, so the same auto-download →
-      // "Update ready" modal → quitAndInstall path works on macOS and Windows.
-      // autoDownload is already running; surface the window so the branded modal
-      // is actually seen when it fires.
-      showWindow();
-      dialog.showMessageBox({
-        type: "info",
-        message: `Downloading version ${next}…`,
-        detail: `You're on v${current}. You'll be prompted to restart as soon as it's ready.`,
-        buttons: ["OK"],
-      });
-    } else {
-      dialog.showMessageBox({
-        type: "info",
-        message: "You're up to date",
-        detail: `Okvia Support v${current} is the latest version.`,
-        buttons: ["OK"],
-      });
-    }
-  } catch (err) {
+// Manual "Check for Updates…" from the tray. The timer-based checks are silent
+// by design; a human click gets an explicit answer (downloading / up to date /
+// failed / ready) via the events above. Never re-checks once an update is staged
+// (that is what deleted it) — re-offers the restart instead.
+function checkForUpdatesInteractive() {
+  if (updateReady) {
+    showReadyPrompt(updateReady);
+    return;
+  }
+  manualUpdateCheck = true;
+  if (!runUpdateCheck("manual")) {
     dialog.showMessageBox({
-      type: "warning",
-      message: "Couldn't check for updates",
-      detail:
-        (err && err.message ? `${err.message}\n\n` : "") +
-        "Check your internet connection and try again.",
+      type: "info",
+      message: "An update is downloading",
+      detail: "You'll be asked to restart when it's ready.",
       buttons: ["OK"],
     });
-  } finally {
-    manualCheckInFlight = false;
   }
 }
 
